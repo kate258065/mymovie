@@ -13,7 +13,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🎬 어제 일별 박스오피스 순위")
+st.title("🎬 어제 일별 박스오피스 (관객수 순 정렬)")
 st.caption("영화진흥위원회(KOBIS) API를 활용한 스트림릿 박스오피스 대시보드")
 
 # -----------------------------------------------------------------------------
@@ -26,7 +26,6 @@ yesterday = now_kst - datetime.timedelta(days=1)
 target_dt = yesterday.strftime('%Y%m%d')
 
 # 스트림릿 secrets 영역에서 KOBIS_KEY 추출
-# (로컬: .streamlit/secrets.toml / 클라우드: App settings -> Secrets)
 api_key = st.secrets.get("KOBIS_KEY")
 
 # 인증키가 없을 경우 처리
@@ -42,7 +41,6 @@ if not api_key:
 # -----------------------------------------------------------------------------
 # 3. API 데이터 호출 및 캐싱 함수
 # -----------------------------------------------------------------------------
-# st.cache_data를 사용해 동일한 데이터에 대해 1시간(3600초) 동안 API 재요청을 방지합니다.
 @st.cache_data(ttl=3600)
 def fetch_box_office_data(key: str, date_str: str):
     url = "https://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchDailyBoxOfficeList.json"
@@ -53,7 +51,6 @@ def fetch_box_office_data(key: str, date_str: str):
     
     try:
         response = requests.get(url, params=params, timeout=10)
-        # HTTP 응답 코드 오류 확인
         response.raise_for_status()
         return response.json(), None
     except requests.exceptions.RequestException as e:
@@ -65,14 +62,12 @@ data, error_msg = fetch_box_office_data(api_key, target_dt)
 # -----------------------------------------------------------------------------
 # 4. 예외 및 오류 처리
 # -----------------------------------------------------------------------------
-# 네트워크 오류 발생 시
 if error_msg:
     st.error("🚨 데이터를 불러오는 중 오류가 발생했습니다.")
     st.warning(error_msg)
     st.info("💡 인터넷 연결 상태를 확인하시거나 KOBIS API 서버 상태를 확인해 주세요.")
     st.stop()
 
-# KOBIS API 특이사항: 키 오류 시 200 OK와 함께 faultInfo 반환
 if "faultInfo" in data:
     fault = data["faultInfo"]
     st.error("🚨 KOBIS API 오류가 발생했습니다.")
@@ -84,11 +79,9 @@ if "faultInfo" in data:
     """)
     st.stop()
 
-# 응답 내 목록 추출
 box_office_result = data.get("boxOfficeResult", {})
 daily_list = box_office_result.get("dailyBoxOfficeList", [])
 
-# 영화 목록이 비어있는 경우
 if not daily_list:
     st.warning(f"⚠️ {yesterday.strftime('%Y년 %m월 %d일')} 데이터가 존재하지 않거나 집계 중입니다.")
     st.info("""
@@ -99,7 +92,7 @@ if not daily_list:
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 5. 데이터 가공 및 정제 (숫자 형변환)
+# 5. 데이터 가공 및 정제 (관객수 기준 정렬)
 # -----------------------------------------------------------------------------
 df = pd.DataFrame(daily_list)
 
@@ -109,25 +102,25 @@ for col in numeric_columns:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
 
-# 순위 기준으로 오름차순 정렬
-df = df.sort_values(by='rank', ascending=True)
+# 당일 관객수(audiCnt)가 많은 순서대로 내림차순 정렬
+df = df.sort_values(by='audiCnt', ascending=False)
 
 # -----------------------------------------------------------------------------
 # 6. 대시보드 화면 구성
 # -----------------------------------------------------------------------------
 st.subheader(f"📅 기준일자: {yesterday.strftime('%Y-%m-%d')} (어제)")
 
-# [상단] 1위 영화 지표 카드 3장
+# [상단] 관객수 1위 영화 지표 카드 3장
 top_1 = df.iloc[0]
 
-st.markdown(f"### 🏆 1위: **{top_1['movieNm']}**")
+st.markdown(f"### 🏆 관객수 1위: **{top_1['movieNm']}**")
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.metric(
         label="당일 관객수",
         value=f"{top_1['audiCnt']:,} 명",
-        delta=f"전일 대비 {top_1['rankInten']} 위" if top_1['rankInten'] != 0 else "순위 변동 없음"
+        delta=f"박스오피스 {top_1['rank']}위"
     )
 
 with col2:
@@ -148,7 +141,6 @@ st.divider()
 st.subheader("📊 관객수 상위 5개 영화")
 top_5_df = df.head(5)
 
-# 스트림릿 기본 막대그래프 활용 (x축: 영화명, y축: 관객수)
 st.bar_chart(
     data=top_5_df,
     x="movieNm",
@@ -158,20 +150,18 @@ st.bar_chart(
 
 st.divider()
 
-# [하단] 전체 순위 표 (데이터프레임)
-st.subheader("📋 박스오피스 전체 순위")
+# [하단] 관객수 순으로 정렬된 표
+st.subheader("📋 전체 영화 목록 (관객수 순 정렬)")
 
-# 화면 표시용 컬럼 추출 및 이름 변경
 display_df = df[['rank', 'movieNm', 'openDt', 'audiCnt', 'audiAcc', 'scrnCnt']].copy()
-display_df.columns = ['순위', '영화명', '개봉일', '관객수', '누적관객수', '스크린수']
+display_df.columns = ['공식순위', '영화명', '개봉일', '당일관객수', '누적관객수', '스크린수']
 
-# 천 단위 쉼표 포맷팅을 적용하여 화면 표출
 st.dataframe(
     display_df,
     use_container_width=True,
     hide_index=True,
     column_config={
-        "관객수": st.column_config.NumberColumn(format="%d 명"),
+        "당일관객수": st.column_config.NumberColumn(format="%d 명"),
         "누적관객수": st.column_config.NumberColumn(format="%d 명"),
         "스크린수": st.column_config.NumberColumn(format="%d 개")
     }
