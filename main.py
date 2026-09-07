@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import pytz
 import streamlit as st
+import altair as alt
 
 # -----------------------------------------------------------------------------
 # 1. 페이지 기본 설정 및 기본 안내
@@ -102,15 +103,16 @@ for col in numeric_columns:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
 
+# 순위(rank) 오름차순으로 기본 정렬
+df_by_rank = df.sort_values(by='rank', ascending=True)
+
 # -----------------------------------------------------------------------------
 # 6. 대시보드 화면 구성
 # -----------------------------------------------------------------------------
 st.subheader(f"📅 기준일자: {yesterday.strftime('%Y-%m-%d')} (어제)")
 
-# [상단 & 중단] 관객수 기준 1위 및 상위 5개 추출용 (관객수 내림차순 정렬)
-df_by_audi = df.sort_values(by='audiCnt', ascending=False)
-
-top_1 = df_by_audi.iloc[0]
+# [상단] 1위 영화 지표 카드 3장
+top_1 = df_by_rank.iloc[0]
 
 st.markdown(f"### 🏆 1위: **{top_1['movieNm']}**")
 col1, col2, col3 = st.columns(3)
@@ -136,24 +138,29 @@ with col3:
 
 st.divider()
 
-# [중단] 관객수 상위 5편 막대그래프
-st.subheader("📊 관객수 상위 5개 영화")
-top_5_df = df_by_audi.head(5)
+# [중단] 순위 높은 순서대로(1위~5위) 좌측 배치 막대그래프
+st.subheader("📊 관객수 상위 5개 영화 (순위 순 정렬)")
+top_5_df = df_by_rank.head(5)
 
-st.bar_chart(
-    data=top_5_df,
-    x="movieNm",
-    y="audiCnt",
-    use_container_width=True
+# Altair 차트를 사용하여 x축 정렬 순서를 순위 순(1위 -> 5위)으로 강제 지정
+chart = alt.Chart(top_5_df).mark_bar().encode(
+    x=alt.X('movieNm:N', sort=top_5_df['movieNm'].tolist(), title="영화명"),
+    y=alt.Y('audiCnt:Q', title="관객수"),
+    tooltip=[
+        alt.Tooltip('rank:Q', title='순위'),
+        alt.Tooltip('movieNm:N', title='영화명'),
+        alt.Tooltip('audiCnt:Q', title='관객수', format=',d')
+    ]
+).properties(
+    height=400
 )
+
+st.altair_chart(chart, use_container_width=True)
 
 st.divider()
 
-# [하단] 전체 순위 표 (순위(rank) 오름차순 정렬)
+# [하단] 전체 순위 표 (순위 순 정렬)
 st.subheader("📋 전체 박스오피스 순위")
-
-# 순위(rank) 오름차순으로 정렬
-df_by_rank = df.sort_values(by='rank', ascending=True)
 
 display_df = df_by_rank[['rank', 'movieNm', 'openDt', 'audiCnt', 'audiAcc', 'scrnCnt']].copy()
 display_df.columns = ['순위', '영화명', '개봉일', '관객수', '누적관객수', '스크린수']
