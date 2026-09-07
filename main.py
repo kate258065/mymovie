@@ -9,22 +9,32 @@ import altair as alt
 # 1. 페이지 기본 설정 및 기본 안내
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="어제 박스오피스 순위",
+    page_title="일별 박스오피스 순위",
     page_icon="🎬",
     layout="wide"
 )
 
-st.title("🎬 어제 일별 박스오피스 대시보드")
+st.title("🎬 일별 박스오피스 대시보드")
 st.caption("영화진흥위원회(KOBIS) API를 활용한 스트림릿 박스오피스 대시보드")
 
 # -----------------------------------------------------------------------------
-# 2. 날짜 및 API 인증키 설정
+# 2. 날짜 선택 및 API 인증키 설정
 # -----------------------------------------------------------------------------
 # 배포 서버의 시간대가 달라도 정확히 한국 시간(KST) 기준으로 '어제' 날짜를 계산합니다.
 kst = pytz.timezone('Asia/Seoul')
 now_kst = datetime.datetime.now(kst)
-yesterday = now_kst - datetime.timedelta(days=1)
-target_dt = yesterday.strftime('%Y%m%d')
+yesterday = (now_kst - datetime.timedelta(days=1)).date()
+
+# 사이드바에서 날짜를 선택할 수 있게 설정 (최대 선택 가능 날짜: 어제)
+st.sidebar.header("🗓️ 날짜 선택")
+selected_date = st.sidebar.date_input(
+    label="조회할 날짜를 선택하세요",
+    value=yesterday,
+    max_value=yesterday
+)
+
+# API 요청용 yyyymmdd 형식 문자열 변환
+target_dt = selected_date.strftime('%Y%m%d')
 
 # 스트림릿 secrets 영역에서 KOBIS_KEY 추출
 api_key = st.secrets.get("KOBIS_KEY")
@@ -42,6 +52,7 @@ if not api_key:
 # -----------------------------------------------------------------------------
 # 3. API 데이터 호출 및 캐싱 함수
 # -----------------------------------------------------------------------------
+# 선택한 날짜에 따라 캐싱이 적용되며, 동일한 날짜 요청은 1시간 동안 재사용합니다.
 @st.cache_data(ttl=3600)
 def fetch_box_office_data(key: str, date_str: str):
     url = "https://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchDailyBoxOfficeList.json"
@@ -83,12 +94,13 @@ if "faultInfo" in data:
 box_office_result = data.get("boxOfficeResult", {})
 daily_list = box_office_result.get("dailyBoxOfficeList", [])
 
+# 선택한 날짜에 영화 목록이 비어서 오는 경우
 if not daily_list:
-    st.warning(f"⚠️ {yesterday.strftime('%Y년 %m월 %d일')} 데이터가 존재하지 않거나 집계 중입니다.")
+    st.warning(f"⚠️ 그날은 아직 집계 전입니다 ({selected_date.strftime('%Y년 %m월 %d일')}).")
     st.info("""
     **확인해야 할 사항:**
     1. 영화진흥위원회(KOBIS)의 일일 데이터 집계 마감 전일 수 있습니다.
-    2. 조회된 날짜에 상영 데이터가 없을 수 있으니 잠시 후 다시 시도해 주세요.
+    2. 데이터 집계가 끝난 다른 과거 날짜를 선택해 주세요.
     """)
     st.stop()
 
@@ -106,22 +118,42 @@ for col in numeric_columns:
 # 순위(rank) 오름차순으로 기본 정렬
 df_by_rank = df.sort_values(by='rank', ascending=True)
 
+# 1. 누적관객수 100만 명 이상 시 영화명 옆에 🏆 트로피 붙이기
+def format_movie_name(row):
+    name = row['movieNm']
+    if row['audiAcc'] >= 1_000_000:
+        return f"🏆 {name}"
+    return name
+
+df_by_rank['display_movieNm'] = df_by_rank.apply(format_movie_name, axis=1)
+
+# 2. 순위 증감(rankInten)에 따른 화살표 표시 설정 (양수: 🔺, 음수: 🔻, 변동없음/신규: -)
+def format_rank_change(inten):
+    if inten > 0:
+        return f"🔺 {inten}"
+    elif inten < 0:
+        return f"🔻 {abs(inten)}"
+    else:
+        return "-"
+
+df_by_rank['rank_change'] = df_by_rank['rankInten'].apply(format_rank_change)
+
 # -----------------------------------------------------------------------------
 # 6. 대시보드 화면 구성
 # -----------------------------------------------------------------------------
-st.subheader(f"📅 기준일자: {yesterday.strftime('%Y-%m-%d')} (어제)")
+st.subheader(f"📅 기준일자: {selected_date.strftime('%Y-%m-%d')}")
 
 # [상단] 1위 영화 지표 카드 3장
 top_1 = df_by_rank.iloc[0]
 
-st.markdown(f"### 🏆 1위: **{top_1['movieNm']}**")
+st.markdown(f"### 🏆 1위: **{top_1['display_movieNm']}**")
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.metric(
         label="당일 관객수",
         value=f"{top_1['audiCnt']:,} 명",
-        delta=f"전일 대비 {top_1['rankInten']} 위" if top_1['rankInten'] != 0 else "순위 변동 없음"
+        delta=f"전일 대비 {top_1['rank_change']}" if top_1['rankInten'] != 0 else "순위 변동 없음"
     )
 
 with col2:
@@ -142,14 +174,15 @@ st.divider()
 st.subheader("📊 관객수 상위 5개 영화 (순위 순 정렬)")
 top_5_df = df_by_rank.head(5)
 
-# Altair 차트를 사용하여 x축 정렬 순서를 순위 순(1위 -> 5위)으로 강제 지정
+# Altair 차트를 사용하여 x축 정렬 순서를 순위 순(1위 -> 5위)으로 지정
 chart = alt.Chart(top_5_df).mark_bar().encode(
-    x=alt.X('movieNm:N', sort=top_5_df['movieNm'].tolist(), title="영화명"),
+    x=alt.X('display_movieNm:N', sort=top_5_df['display_movieNm'].tolist(), title="영화명"),
     y=alt.Y('audiCnt:Q', title="관객수"),
     tooltip=[
         alt.Tooltip('rank:Q', title='순위'),
         alt.Tooltip('movieNm:N', title='영화명'),
-        alt.Tooltip('audiCnt:Q', title='관객수', format=',d')
+        alt.Tooltip('audiCnt:Q', title='관객수', format=',d'),
+        alt.Tooltip('audiAcc:Q', title='누적관객수', format=',d')
     ]
 ).properties(
     height=400
@@ -159,11 +192,11 @@ st.altair_chart(chart, use_container_width=True)
 
 st.divider()
 
-# [하단] 전체 순위 표 (순위 순 정렬)
+# [하단] 전체 순위 표
 st.subheader("📋 전체 박스오피스 순위")
 
-display_df = df_by_rank[['rank', 'movieNm', 'openDt', 'audiCnt', 'audiAcc', 'scrnCnt']].copy()
-display_df.columns = ['순위', '영화명', '개봉일', '관객수', '누적관객수', '스크린수']
+display_df = df_by_rank[['rank', 'rank_change', 'display_movieNm', 'openDt', 'audiCnt', 'audiAcc', 'scrnCnt']].copy()
+display_df.columns = ['순위', '순위변동', '영화명', '개봉일', '관객수', '누적관객수', '스크린수']
 
 st.dataframe(
     display_df,
