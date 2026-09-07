@@ -13,7 +13,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🎬 어제 일별 박스오피스 (관객수 순 정렬)")
+st.title("🎬 어제 일별 박스오피스 대시보드")
 st.caption("영화진흥위원회(KOBIS) API를 활용한 스트림릿 박스오피스 대시보드")
 
 # -----------------------------------------------------------------------------
@@ -92,7 +92,7 @@ if not daily_list:
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 5. 데이터 가공 및 정제 (관객수 기준 정렬)
+# 5. 데이터 가공 및 정제
 # -----------------------------------------------------------------------------
 df = pd.DataFrame(daily_list)
 
@@ -102,25 +102,24 @@ for col in numeric_columns:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
 
-# 당일 관객수(audiCnt)가 많은 순서대로 내림차순 정렬
-df = df.sort_values(by='audiCnt', ascending=False)
-
 # -----------------------------------------------------------------------------
 # 6. 대시보드 화면 구성
 # -----------------------------------------------------------------------------
 st.subheader(f"📅 기준일자: {yesterday.strftime('%Y-%m-%d')} (어제)")
 
-# [상단] 관객수 1위 영화 지표 카드 3장
-top_1 = df.iloc[0]
+# [상단 & 중단] 관객수 기준 1위 및 상위 5개 추출용 (관객수 내림차순 정렬)
+df_by_audi = df.sort_values(by='audiCnt', ascending=False)
 
-st.markdown(f"### 🏆 관객수 1위: **{top_1['movieNm']}**")
+top_1 = df_by_audi.iloc[0]
+
+st.markdown(f"### 🏆 1위: **{top_1['movieNm']}**")
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.metric(
         label="당일 관객수",
         value=f"{top_1['audiCnt']:,} 명",
-        delta=f"박스오피스 {top_1['rank']}위"
+        delta=f"전일 대비 {top_1['rankInten']} 위" if top_1['rankInten'] != 0 else "순위 변동 없음"
     )
 
 with col2:
@@ -139,7 +138,7 @@ st.divider()
 
 # [중단] 관객수 상위 5편 막대그래프
 st.subheader("📊 관객수 상위 5개 영화")
-top_5_df = df.head(5)
+top_5_df = df_by_audi.head(5)
 
 st.bar_chart(
     data=top_5_df,
@@ -150,18 +149,21 @@ st.bar_chart(
 
 st.divider()
 
-# [하단] 관객수 순으로 정렬된 표
-st.subheader("📋 전체 영화 목록 (관객수 순 정렬)")
+# [하단] 전체 순위 표 (순위(rank) 오름차순 정렬)
+st.subheader("📋 전체 박스오피스 순위")
 
-display_df = df[['rank', 'movieNm', 'openDt', 'audiCnt', 'audiAcc', 'scrnCnt']].copy()
-display_df.columns = ['공식순위', '영화명', '개봉일', '당일관객수', '누적관객수', '스크린수']
+# 순위(rank) 오름차순으로 정렬
+df_by_rank = df.sort_values(by='rank', ascending=True)
+
+display_df = df_by_rank[['rank', 'movieNm', 'openDt', 'audiCnt', 'audiAcc', 'scrnCnt']].copy()
+display_df.columns = ['순위', '영화명', '개봉일', '관객수', '누적관객수', '스크린수']
 
 st.dataframe(
     display_df,
     use_container_width=True,
     hide_index=True,
     column_config={
-        "당일관객수": st.column_config.NumberColumn(format="%d 명"),
+        "관객수": st.column_config.NumberColumn(format="%d 명"),
         "누적관객수": st.column_config.NumberColumn(format="%d 명"),
         "스크린수": st.column_config.NumberColumn(format="%d 개")
     }
